@@ -1,0 +1,1 @@
+"# Financial Platform - Clean Architecture" 
