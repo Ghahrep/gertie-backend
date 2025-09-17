@@ -116,6 +116,7 @@ class Portfolio(Base):
     owner = relationship("User", back_populates="portfolios")
     holdings = relationship("Holding", back_populates="portfolio", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="portfolio")
+    transactions = relationship("Transaction", back_populates="portfolio")
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize portfolio for API responses"""
@@ -129,6 +130,24 @@ class Portfolio(Base):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'holdings_count': len(self.holdings) if self.holdings else 0
         }
+    
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"))
+    asset_id = Column(Integer, ForeignKey("assets.id"))
+    transaction_type = Column(String)  # "buy" or "sell"
+    shares = Column(Float)
+    price_per_share = Column(Float)
+    total_amount = Column(Float)
+    transaction_date = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    portfolio = relationship("Portfolio", back_populates="transactions")
+    asset = relationship("Asset")
 
 class Holding(Base):
     """Individual positions within portfolios"""
@@ -260,6 +279,8 @@ def calculate_portfolio_summary(portfolio: Portfolio) -> Dict[str, Any]:
         )[:5]  # Top 5 holdings by value
     }
 
+
+
 def create_sample_portfolio_data(user_id: int) -> Dict[str, List[Dict]]:
     """Create sample data for development/testing"""
     return {
@@ -290,8 +311,97 @@ def create_sample_portfolio_data(user_id: int) -> Dict[str, List[Dict]]:
         ]
     }
 
+class ChatConversation(Base):
+    """Chat conversation sessions for Investment Committee"""
+    __tablename__ = "chat_conversations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False)
+    title = Column(String(200), nullable=False)
+    
+    # Conversation metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_message_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+    
+    # Conversation summary and context
+    summary = Column(String(500))  # Auto-generated summary
+    total_messages = Column(Integer, default=0)
+    
+    # Relationships
+    user = relationship("User")
+    portfolio = relationship("Portfolio")
+    messages = relationship("ChatMessage", back_populates="conversation", cascade="all, delete-orphan")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "portfolio_id": self.portfolio_id,
+            "title": self.title,
+            "summary": self.summary,
+            "total_messages": self.total_messages,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_message_at": self.last_message_at.isoformat() if self.last_message_at else None,
+            "is_active": self.is_active
+        }
+
+class ChatMessage(Base):
+    """Individual messages within chat conversations"""
+    __tablename__ = "chat_messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("chat_conversations.id"), nullable=False)
+    
+    # Message content
+    role = Column(String(20), nullable=False)  # "user", "assistant", "system"
+    content = Column(String(10000), nullable=False)
+    
+    # Specialist routing information
+    specialist_id = Column(String(50))  # Which specialist handled this
+    routing_confidence = Column(Float)  # Routing confidence score
+    
+    # Message metadata
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    tokens_used = Column(Integer, default=0)
+    
+    # Analysis context - store portfolio state at time of message
+    portfolio_context = Column(JSON)  # Portfolio value, risk metrics, etc.
+    
+    # Relationships
+    conversation = relationship("ChatConversation", back_populates="messages")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "conversation_id": self.conversation_id,
+            "role": self.role,
+            "content": self.content,
+            "specialist_id": self.specialist_id,
+            "routing_confidence": self.routing_confidence,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "tokens_used": self.tokens_used,
+            "portfolio_context": self.portfolio_context
+        }
+    
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "conversation_id": self.conversation_id,
+            "role": self.role,
+            "content": self.content,
+            "specialist_id": self.specialist_id,
+            "routing_confidence": self.routing_confidence,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "tokens_used": self.tokens_used,
+            "portfolio_context": self.portfolio_context
+        }
+
 # Export all models for imports
 __all__ = [
     "Base", "User", "Asset", "Portfolio", "Holding", "Alert",
+    "ChatConversation", "ChatMessage",
     "calculate_portfolio_summary", "create_sample_portfolio_data"
 ]

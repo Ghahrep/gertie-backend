@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, Union
 from datetime import datetime
 
+
 from db.session import SessionLocal
 from db.models import User
 from .middleware import (
@@ -357,3 +358,4 @@ async def list_users(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users"
         )
+
