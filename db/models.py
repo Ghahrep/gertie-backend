@@ -1,7 +1,7 @@
-# Task 1.2: Create Clean Database Schema
+# Enhanced Database Models - Complete Schema
 # File: db/models.py
 
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, JSON, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -38,6 +38,10 @@ class User(Base):
     # Relationships
     portfolios = relationship("Portfolio", back_populates="owner", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="user", cascade="all, delete-orphan")
+    conversation_turns = relationship("ConversationTurn", back_populates="user", cascade="all, delete-orphan")
+    user_profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    proactive_insights = relationship("ProactiveInsight", back_populates="user", cascade="all, delete-orphan")
+    enhanced_conversations = relationship("EnhancedConversation", back_populates="user", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<User(id={self.id}, email='{self.email}', role='{self.role}', active={self.is_active})>"
@@ -117,6 +121,9 @@ class Portfolio(Base):
     holdings = relationship("Holding", back_populates="portfolio", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="portfolio")
     transactions = relationship("Transaction", back_populates="portfolio")
+    snapshots = relationship("PortfolioSnapshot", back_populates="portfolio", cascade="all, delete-orphan")
+    enhanced_conversations = relationship("EnhancedConversation", back_populates="portfolio", cascade="all, delete-orphan")
+    proactive_insights = relationship("ProactiveInsight", back_populates="portfolio")
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize portfolio for API responses"""
@@ -130,7 +137,6 @@ class Portfolio(Base):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'holdings_count': len(self.holdings) if self.holdings else 0
         }
-    
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -243,74 +249,6 @@ class Alert(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
 
-# Utility functions for portfolio operations
-def calculate_portfolio_summary(portfolio: Portfolio) -> Dict[str, Any]:
-    """Calculate portfolio summary with current values"""
-    if not portfolio.holdings:
-        return {
-            "id": portfolio.id,
-            "name": portfolio.name,
-            "total_value": 0.0,
-            "total_cost": 0.0,
-            "total_pnl": 0.0,
-            "total_pnl_percent": 0.0,
-            "holdings_count": 0,
-            "holdings": []
-        }
-    
-    total_value = sum(holding.current_value() for holding in portfolio.holdings)
-    total_cost = sum(holding.cost_basis or (holding.shares * holding.purchase_price) 
-                    for holding in portfolio.holdings)
-    total_pnl = total_value - total_cost
-    
-    return {
-        "id": portfolio.id,
-        "name": portfolio.name,
-        "total_value": round(total_value, 2),
-        "total_cost": round(total_cost, 2),
-        "total_pnl": round(total_pnl, 2),
-        "total_pnl_percent": round((total_pnl / total_cost * 100), 2) if total_cost > 0 else 0,
-        "holdings_count": len(portfolio.holdings),
-        "holdings": [holding.to_dict() for holding in portfolio.holdings],
-        "top_holdings": sorted(
-            [holding.to_dict() for holding in portfolio.holdings],
-            key=lambda x: x["current_value"],
-            reverse=True
-        )[:5]  # Top 5 holdings by value
-    }
-
-
-
-def create_sample_portfolio_data(user_id: int) -> Dict[str, List[Dict]]:
-    """Create sample data for development/testing"""
-    return {
-        "assets": [
-            {"ticker": "AAPL", "name": "Apple Inc.", "asset_type": "stock", "sector": "Technology", "current_price": 175.0},
-            {"ticker": "MSFT", "name": "Microsoft Corporation", "asset_type": "stock", "sector": "Technology", "current_price": 340.0},
-            {"ticker": "TSLA", "name": "Tesla Inc.", "asset_type": "stock", "sector": "Consumer Discretionary", "current_price": 250.0},
-            {"ticker": "SPY", "name": "SPDR S&P 500 ETF", "asset_type": "etf", "sector": "Diversified", "current_price": 450.0},
-            {"ticker": "QQQ", "name": "Invesco QQQ ETF", "asset_type": "etf", "sector": "Technology", "current_price": 380.0},
-            {"ticker": "NVDA", "name": "NVIDIA Corporation", "asset_type": "stock", "sector": "Technology", "current_price": 420.0},
-            {"ticker": "GOOGL", "name": "Alphabet Inc.", "asset_type": "stock", "sector": "Technology", "current_price": 135.0},
-            {"ticker": "AMZN", "name": "Amazon.com Inc.", "asset_type": "stock", "sector": "Consumer Discretionary", "current_price": 145.0}
-        ],
-        "portfolios": [
-            {"user_id": user_id, "name": "Main Portfolio", "description": "Primary investment portfolio"},
-            {"user_id": user_id, "name": "Growth Portfolio", "description": "High-growth technology focus"}
-        ],
-        "sample_holdings": [
-            # Main Portfolio holdings
-            {"portfolio_name": "Main Portfolio", "ticker": "AAPL", "shares": 100, "purchase_price": 150.0},
-            {"portfolio_name": "Main Portfolio", "ticker": "MSFT", "shares": 50, "purchase_price": 300.0},
-            {"portfolio_name": "Main Portfolio", "ticker": "SPY", "shares": 200, "purchase_price": 420.0},
-            {"portfolio_name": "Main Portfolio", "ticker": "QQQ", "shares": 100, "purchase_price": 350.0},
-            # Growth Portfolio holdings
-            {"portfolio_name": "Growth Portfolio", "ticker": "TSLA", "shares": 75, "purchase_price": 200.0},
-            {"portfolio_name": "Growth Portfolio", "ticker": "NVDA", "shares": 25, "purchase_price": 380.0},
-            {"portfolio_name": "Growth Portfolio", "ticker": "GOOGL", "shares": 50, "purchase_price": 120.0}
-        ]
-    }
-
 class ChatConversation(Base):
     """Chat conversation sessions for Investment Committee"""
     __tablename__ = "chat_conversations"
@@ -384,24 +322,456 @@ class ChatMessage(Base):
             "tokens_used": self.tokens_used,
             "portfolio_context": self.portfolio_context
         }
+
+# ============================================================================
+# ADVANCED AI MODELS FOR WEEK 1 & 2 CAPABILITIES
+# ============================================================================
+
+# 1. CONVERSATION MEMORY SYSTEM (Week 1 Advanced Memory)
+
+class ConversationTurn(Base):
+    """Individual conversation turns for advanced memory system"""
+    __tablename__ = "conversation_turns"
     
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    conversation_id = Column(String(100), nullable=False)  # UUID for conversation grouping
+    
+    # Turn content
+    user_query = Column(Text, nullable=False)
+    agent_response = Column(Text, nullable=False)
+    specialist = Column(String(50), nullable=False)  # quantitative_analyst, portfolio_manager, etc.
+    
+    # Analysis metadata
+    confidence = Column(Float, default=0.0)
+    risk_score = Column(Integer, default=50)
+    collaboration_involved = Column(Boolean, default=False)
+    secondary_specialists = Column(JSON, default=list)  # List of additional specialists consulted
+    
+    # Context and embeddings
+    portfolio_context = Column(JSON)  # Portfolio state at time of turn
+    semantic_embedding = Column(JSON)  # Stored as JSON array for similarity search
+    
+    # User feedback and learning
+    user_satisfaction = Column(Float, nullable=True)  # 0.0-1.0 rating
+    user_engagement_time = Column(Integer, default=0)  # Seconds spent on response
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="conversation_turns")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "user_query": self.user_query,
+            "agent_response": self.agent_response,
+            "specialist": self.specialist,
+            "confidence": self.confidence,
+            "risk_score": self.risk_score,
+            "collaboration_involved": self.collaboration_involved,
+            "secondary_specialists": self.secondary_specialists,
+            "user_satisfaction": self.user_satisfaction,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+class UserProfile(Base):
+    """User learning profile for personalized routing"""
+    __tablename__ = "user_profiles"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    
+    # Learning metrics
+    expertise_level = Column(String(20), default="beginner")  # beginner, intermediate, advanced, expert
+    complexity_preference = Column(Float, default=0.5)  # 0.0 (simple) to 1.0 (complex)
+    collaboration_preference = Column(Float, default=0.5)  # Preference for multi-agent responses
+    
+    # Agent satisfaction scores (JSON dict)
+    agent_satisfaction_scores = Column(JSON, default=dict)  # {"quantitative_analyst": 0.8, ...}
+    
+    # Usage patterns
+    total_conversations = Column(Integer, default=0)
+    total_turns = Column(Integer, default=0)
+    avg_session_length = Column(Float, default=0.0)
+    
+    # Preference learning
+    preferred_response_length = Column(String(20), default="medium")  # short, medium, long
+    preferred_detail_level = Column(String(20), default="standard")  # basic, standard, detailed
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="user_profile")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "expertise_level": self.expertise_level,
+            "complexity_preference": self.complexity_preference,
+            "collaboration_preference": self.collaboration_preference,
+            "agent_satisfaction_scores": self.agent_satisfaction_scores or {},
+            "total_conversations": self.total_conversations,
+            "total_turns": self.total_turns,
+            "preferred_response_length": self.preferred_response_length,
+            "preferred_detail_level": self.preferred_detail_level,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        }
+
+# 2. PROACTIVE INSIGHTS SYSTEM (Week 2)
+
+class ProactiveInsight(Base):
+    """Proactive insights generated by the system"""
+    __tablename__ = "proactive_insights"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=True)
+    
+    # Insight identification
+    insight_id = Column(String(100), unique=True, nullable=False)  # Unique insight identifier
+    insight_type = Column(String(50), nullable=False)  # portfolio_drift, behavioral_pattern, market_opportunity
+    priority = Column(String(20), nullable=False)  # critical, high, medium, low, info
+    
+    # Content
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    recommendations = Column(JSON, default=list)  # List of recommendation strings
+    conversation_starters = Column(JSON, default=list)  # List of conversation starter strings
+    
+    # Metadata and analysis data
+    data = Column(JSON, default=dict)  # Analysis data, metrics, etc.
+    
+    # Lifecycle
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
+    
+    # User engagement tracking
+    view_count = Column(Integer, default=0)
+    click_count = Column(Integer, default=0)
+    dismiss_count = Column(Integer, default=0)
+    action_taken = Column(Boolean, default=False)
+    
+    # Relationships
+    user = relationship("User", back_populates="proactive_insights")
+    portfolio = relationship("Portfolio", back_populates="proactive_insights")
+    engagements = relationship("InsightEngagement", back_populates="insight", cascade="all, delete-orphan")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.insight_id,
+            "type": self.insight_type,
+            "priority": self.priority,
+            "title": self.title,
+            "description": self.description,
+            "recommendations": self.recommendations or [],
+            "conversation_starters": self.conversation_starters or [],
+            "data": self.data or {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "is_active": self.is_active,
+            "engagement_stats": {
+                "view_count": self.view_count,
+                "click_count": self.click_count,
+                "action_taken": self.action_taken
+            }
+        }
+
+class InsightEngagement(Base):
+    """Track user engagement with proactive insights"""
+    __tablename__ = "insight_engagements"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    insight_id = Column(Integer, ForeignKey("proactive_insights.id"), nullable=False)
+    
+    # Engagement details
+    engagement_type = Column(String(50), nullable=False)  # viewed, clicked, dismissed, acted_upon
+    engagement_data = Column(JSON, default=dict)  # Additional context
+    
+    # Timing
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User")
+    insight = relationship("ProactiveInsight", back_populates="engagements")
+
+# 3. PORTFOLIO EVOLUTION TRACKING
+
+class PortfolioSnapshot(Base):
+    """Historical snapshots of portfolio state for drift detection"""
+    __tablename__ = "portfolio_snapshots"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False)
+    
+    # Snapshot data
+    total_value = Column(Float, nullable=False)
+    holdings_data = Column(JSON, nullable=False)  # Complete holdings at time of snapshot
+    allocation_weights = Column(JSON, default=dict)  # Asset allocation percentages
+    
+    # Risk metrics
+    risk_score = Column(Float, default=0.0)
+    concentration_ratio = Column(Float, default=0.0)  # Herfindahl index
+    volatility_estimate = Column(Float, default=0.0)
+    
+    # Market context
+    market_conditions = Column(JSON, default=dict)  # Market state at snapshot time
+    
+    # Metadata
+    snapshot_type = Column(String(50), default="scheduled")  # scheduled, triggered, manual
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    portfolio = relationship("Portfolio", back_populates="snapshots")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "portfolio_id": self.portfolio_id,
+            "total_value": self.total_value,
+            "holdings_data": self.holdings_data,
+            "allocation_weights": self.allocation_weights,
+            "risk_score": self.risk_score,
+            "concentration_ratio": self.concentration_ratio,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+# 4. ENHANCED CONVERSATION TRACKING (Better than existing ChatMessage)
+
+class EnhancedConversation(Base):
+    """Enhanced conversation tracking with memory features"""
+    __tablename__ = "enhanced_conversations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False)
+    
+    # Conversation identification
+    conversation_id = Column(String(100), unique=True, nullable=False)  # UUID
+    session_id = Column(String(100), nullable=True)  # Frontend session grouping
+    
+    # Content
+    user_query = Column(Text, nullable=False)
+    agent_response = Column(Text, nullable=False)
+    
+    # Routing and analysis
+    specialist = Column(String(50), nullable=False)
+    routing_confidence = Column(Float, default=0.0)
+    analysis_confidence = Column(Float, default=0.0)
+    
+    # Enhanced features
+    collaboration_used = Column(Boolean, default=False)
+    specialists_consulted = Column(JSON, default=list)
+    tools_used = Column(JSON, default=list)
+    
+    # Context and insights
+    portfolio_context = Column(JSON, default=dict)
+    proactive_insights_count = Column(Integer, default=0)
+    related_insights_count = Column(Integer, default=0)
+    
+    # Performance metrics
+    response_time_ms = Column(Integer, default=0)
+    tokens_used = Column(Integer, default=0)
+    
+    # User feedback
+    user_rating = Column(Float, nullable=True)  # 1-5 star rating
+    user_feedback_text = Column(Text, nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="enhanced_conversations")
+    portfolio = relationship("Portfolio", back_populates="enhanced_conversations")
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
             "conversation_id": self.conversation_id,
-            "role": self.role,
-            "content": self.content,
-            "specialist_id": self.specialist_id,
+            "user_query": self.user_query,
+            "agent_response": self.agent_response,
+            "specialist": self.specialist,
             "routing_confidence": self.routing_confidence,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
-            "tokens_used": self.tokens_used,
-            "portfolio_context": self.portfolio_context
+            "analysis_confidence": self.analysis_confidence,
+            "collaboration_used": self.collaboration_used,
+            "specialists_consulted": self.specialists_consulted or [],
+            "tools_used": self.tools_used or [],
+            "proactive_insights_count": self.proactive_insights_count,
+            "user_rating": self.user_rating,
+            "created_at": self.created_at.isoformat() if self.created_at else None
         }
+
+# 5. SYSTEM ANALYTICS AND PERFORMANCE
+
+class SystemMetrics(Base):
+    """System performance and usage metrics"""
+    __tablename__ = "system_metrics"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Metric identification
+    metric_type = Column(String(50), nullable=False)  # routing_accuracy, response_time, user_satisfaction
+    metric_name = Column(String(100), nullable=False)
+    
+    # Values
+    value = Column(Float, nullable=False)
+    count = Column(Integer, default=1)
+    
+    # Context
+    context = Column(JSON, default=dict)  # Additional context data
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Optional user-specific
+    
+    # Timestamps
+    recorded_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User")
+
+# ============================================================================
+# UTILITY FUNCTIONS FOR DATABASE OPERATIONS
+# ============================================================================
+
+def calculate_portfolio_summary(portfolio: Portfolio) -> Dict[str, Any]:
+    """Calculate portfolio summary with current values"""
+    if not portfolio.holdings:
+        return {
+            "id": portfolio.id,
+            "name": portfolio.name,
+            "total_value": 0.0,
+            "total_cost": 0.0,
+            "total_pnl": 0.0,
+            "total_pnl_percent": 0.0,
+            "holdings_count": 0,
+            "holdings": []
+        }
+    
+    total_value = sum(holding.current_value() for holding in portfolio.holdings)
+    total_cost = sum(holding.cost_basis or (holding.shares * holding.purchase_price) 
+                    for holding in portfolio.holdings)
+    total_pnl = total_value - total_cost
+    
+    return {
+        "id": portfolio.id,
+        "name": portfolio.name,
+        "total_value": round(total_value, 2),
+        "total_cost": round(total_cost, 2),
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_percent": round((total_pnl / total_cost * 100), 2) if total_cost > 0 else 0,
+        "holdings_count": len(portfolio.holdings),
+        "holdings": [holding.to_dict() for holding in portfolio.holdings],
+        "top_holdings": sorted(
+            [holding.to_dict() for holding in portfolio.holdings],
+            key=lambda x: x["current_value"],
+            reverse=True
+        )[:5]  # Top 5 holdings by value
+    }
+
+def create_sample_portfolio_data(user_id: int) -> Dict[str, List[Dict]]:
+    """Create sample data for development/testing"""
+    return {
+        "assets": [
+            {"ticker": "AAPL", "name": "Apple Inc.", "asset_type": "stock", "sector": "Technology", "current_price": 175.0},
+            {"ticker": "MSFT", "name": "Microsoft Corporation", "asset_type": "stock", "sector": "Technology", "current_price": 340.0},
+            {"ticker": "TSLA", "name": "Tesla Inc.", "asset_type": "stock", "sector": "Consumer Discretionary", "current_price": 250.0},
+            {"ticker": "SPY", "name": "SPDR S&P 500 ETF", "asset_type": "etf", "sector": "Diversified", "current_price": 450.0},
+            {"ticker": "QQQ", "name": "Invesco QQQ ETF", "asset_type": "etf", "sector": "Technology", "current_price": 380.0},
+            {"ticker": "NVDA", "name": "NVIDIA Corporation", "asset_type": "stock", "sector": "Technology", "current_price": 420.0},
+            {"ticker": "GOOGL", "name": "Alphabet Inc.", "asset_type": "stock", "sector": "Technology", "current_price": 135.0},
+            {"ticker": "AMZN", "name": "Amazon.com Inc.", "asset_type": "stock", "sector": "Consumer Discretionary", "current_price": 145.0}
+        ],
+        "portfolios": [
+            {"user_id": user_id, "name": "Main Portfolio", "description": "Primary investment portfolio"},
+            {"user_id": user_id, "name": "Growth Portfolio", "description": "High-growth technology focus"}
+        ],
+        "sample_holdings": [
+            # Main Portfolio holdings
+            {"portfolio_name": "Main Portfolio", "ticker": "AAPL", "shares": 100, "purchase_price": 150.0},
+            {"portfolio_name": "Main Portfolio", "ticker": "MSFT", "shares": 50, "purchase_price": 300.0},
+            {"portfolio_name": "Main Portfolio", "ticker": "SPY", "shares": 200, "purchase_price": 420.0},
+            {"portfolio_name": "Main Portfolio", "ticker": "QQQ", "shares": 100, "purchase_price": 350.0},
+            # Growth Portfolio holdings
+            {"portfolio_name": "Growth Portfolio", "ticker": "TSLA", "shares": 75, "purchase_price": 200.0},
+            {"portfolio_name": "Growth Portfolio", "ticker": "NVDA", "shares": 25, "purchase_price": 380.0},
+            {"portfolio_name": "Growth Portfolio", "ticker": "GOOGL", "shares": 50, "purchase_price": 120.0}
+        ]
+    }
+
+# ============================================================================
+# HELPER FUNCTIONS FOR NEW AI MODELS
+# ============================================================================
+
+def create_conversation_turn(user_id: int, conversation_id: str, user_query: str, 
+                           agent_response: str, specialist: str, **kwargs) -> ConversationTurn:
+    """Helper to create conversation turns"""
+    return ConversationTurn(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        user_query=user_query,
+        agent_response=agent_response,
+        specialist=specialist,
+        confidence=kwargs.get('confidence', 0.85),
+        risk_score=kwargs.get('risk_score', 50),
+        collaboration_involved=kwargs.get('collaboration_involved', False),
+        secondary_specialists=kwargs.get('secondary_specialists', []),
+        portfolio_context=kwargs.get('portfolio_context', {})
+    )
+
+def get_user_profile_or_create(db_session, user_id: int) -> UserProfile:
+    """Get or create user profile for learning"""
+    profile = db_session.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+    if not profile:
+        profile = UserProfile(user_id=user_id)
+        db_session.add(profile)
+        db_session.commit()
+    return profile
+
+def create_proactive_insight(user_id: int, insight_type: str, priority: str,
+                           title: str, description: str, **kwargs) -> ProactiveInsight:
+    """Helper to create proactive insights"""
+    insight_id = f"{insight_type}_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    return ProactiveInsight(
+        user_id=user_id,
+        portfolio_id=kwargs.get('portfolio_id'),
+        insight_id=insight_id,
+        insight_type=insight_type,
+        priority=priority,
+        title=title,
+        description=description,
+        recommendations=kwargs.get('recommendations', []),
+        conversation_starters=kwargs.get('conversation_starters', []),
+        data=kwargs.get('data', {}),
+        expires_at=kwargs.get('expires_at')
+    )
+
+def record_system_metric(metric_type: str, metric_name: str, value: float, 
+                        context: dict = None, user_id: int = None) -> SystemMetrics:
+    """Helper to record system metrics"""
+    return SystemMetrics(
+        metric_type=metric_type,
+        metric_name=metric_name,
+        value=value,
+        context=context or {},
+        user_id=user_id
+    )
 
 # Export all models for imports
 __all__ = [
-    "Base", "User", "Asset", "Portfolio", "Holding", "Alert",
+    "Base", "User", "Asset", "Portfolio", "Holding", "Alert", "Transaction",
     "ChatConversation", "ChatMessage",
-    "calculate_portfolio_summary", "create_sample_portfolio_data"
+    # Advanced AI models
+    "ConversationTurn", "UserProfile", "ProactiveInsight", "InsightEngagement",
+    "PortfolioSnapshot", "EnhancedConversation", "SystemMetrics",
+    # Helper functions
+    "calculate_portfolio_summary", "create_sample_portfolio_data",
+    "create_conversation_turn", "get_user_profile_or_create", 
+    "create_proactive_insight", "record_system_metric"
 ]

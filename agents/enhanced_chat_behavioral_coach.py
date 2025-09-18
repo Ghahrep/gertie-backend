@@ -370,3 +370,241 @@ class EnhancedChatBehavioralCoach(BaseAgent):
                 "specialist": "Behavioral Coach"
             }
         }
+    
+    def _generate_enhanced_mitigation_strategies(self, detected_biases: Dict, risk_impact_score: int) -> Dict:
+        """Generate enhanced mitigation strategies for detected biases"""
+        if not detected_biases:
+            return {
+                "primary_recommendation": "Continue developing behavioral awareness",
+                "priority": "Low",
+                "strategies": ["Maintain current disciplined approach"],
+                "psychology_insight": "Strong behavioral foundation detected"
+            }
+        
+        strategies = []
+        primary_recommendation = ""
+        priority = "Medium"
+        
+        # Analyze bias types and generate specific strategies
+        bias_types = list(detected_biases.keys())
+        high_risk_biases = [bias for bias, data in detected_biases.items() 
+                        if data.get('severity', 'Medium') == 'High']
+        
+        if high_risk_biases:
+            priority = "High"
+            primary_recommendation = "Implement immediate bias mitigation protocols"
+            
+            for bias in high_risk_biases[:3]:  # Top 3 high-risk biases
+                if 'confirmation' in bias.lower():
+                    strategies.append("• Seek contradictory evidence before decisions")
+                    strategies.append("• Implement devil's advocate approach")
+                elif 'anchoring' in bias.lower():
+                    strategies.append("• Use multiple valuation methods")
+                    strategies.append("• Set predetermined decision criteria")
+                elif 'loss aversion' in bias.lower():
+                    strategies.append("• Focus on long-term expected outcomes")
+                    strategies.append("• Pre-commit to stop-loss and profit-taking rules")
+                elif 'overconfidence' in bias.lower():
+                    strategies.append("• Seek external validation of decisions")
+                    strategies.append("• Track prediction accuracy systematically")
+                else:
+                    strategies.append(f"• Address {bias} through systematic decision frameworks")
+        
+        elif len(bias_types) > 2:
+            priority = "Medium"
+            primary_recommendation = "Develop systematic bias awareness program"
+            strategies.extend([
+                "• Implement regular decision review sessions",
+                "• Use structured decision-making checklists",
+                "• Practice pre-mortem analysis on major decisions"
+            ])
+        
+        else:
+            priority = "Low"
+            primary_recommendation = "Monitor behavioral patterns and maintain awareness"
+            strategies.extend([
+                "• Continue current disciplined approach",
+                "• Periodic bias self-assessment",
+                "• Maintain decision journaling"
+            ])
+        
+        # Risk-based additional strategies
+        if risk_impact_score > 70:
+            strategies.insert(0, "• Consider professional behavioral coaching")
+            strategies.insert(1, "• Implement mandatory cooling-off periods")
+        
+        return {
+            "primary_recommendation": primary_recommendation,
+            "priority": priority,
+            "strategies": strategies[:5],  # Limit to 5 strategies
+            "psychology_insight": self._generate_psychology_insight(detected_biases, risk_impact_score),
+            "implementation_timeline": "Immediate" if priority == "High" else "1-2 weeks"
+        }
+
+    def _generate_psychology_insight(self, detected_biases: Dict, risk_score: int) -> str:
+        """Generate psychology insight based on bias analysis"""
+        if not detected_biases:
+            return "Rational decision-making patterns with low behavioral risk"
+        
+        bias_count = len(detected_biases)
+        
+        if risk_score > 70:
+            return f"High behavioral risk detected with {bias_count} active biases requiring immediate intervention"
+        elif risk_score > 50:
+            return f"Moderate behavioral risk with {bias_count} biases showing patterns requiring attention"
+        else:
+            return f"Low-moderate behavioral risk with {bias_count} biases within normal range"
+
+    def _generate_enhanced_emotional_strategies(self, sentiment: str, confidence: float, emotional_impact: Dict) -> Dict:
+        """Generate enhanced emotional regulation strategies"""
+        strategies = []
+        
+        if sentiment == "negative" and confidence > 0.6:
+            primary_recommendation = "Implement immediate emotional regulation protocols"
+            strategies.extend([
+                "• Pause all investment decisions for 24-48 hours",
+                "• Practice systematic risk assessment framework",
+                "• Focus on long-term investment objectives",
+                "• Consider dollar-cost averaging for new positions"
+            ])
+            psychology_insight = "High negative sentiment detected requiring emotional regulation"
+            coaching_advice = "Avoid major portfolio changes during heightened emotional states"
+        
+        elif sentiment == "positive" and confidence > 0.7:
+            primary_recommendation = "Moderate enthusiasm with systematic decision-making"
+            strategies.extend([
+                "• Verify decisions with fundamental analysis",
+                "• Maintain predetermined position size limits",
+                "• Consider taking partial profits if appropriate",
+                "• Avoid FOMO-driven investment decisions"
+            ])
+            psychology_insight = "High confidence detected - guard against overconfidence bias"
+            coaching_advice = "Channel optimism through disciplined investment process"
+        
+        elif sentiment in ["uncertain", "mixed"]:
+            primary_recommendation = "Clarify investment objectives and reduce uncertainty"
+            strategies.extend([
+                "• Review investment thesis for each position",
+                "• Seek additional research and analysis",
+                "• Consider reducing position sizes until clarity improves",
+                "• Focus on high-conviction opportunities only"
+            ])
+            psychology_insight = "Decision uncertainty detected requiring strategic clarity"
+            coaching_advice = "Address uncertainty through enhanced research and planning"
+        
+        else:
+            primary_recommendation = "Maintain current emotional discipline"
+            strategies.extend([
+                "• Continue systematic investment approach",
+                "• Monitor emotional state regularly",
+                "• Maintain decision journaling practice"
+            ])
+            psychology_insight = "Stable emotional state supporting rational decisions"
+            coaching_advice = "Maintain current emotional discipline and awareness"
+        
+        return {
+            "primary_recommendation": primary_recommendation,
+            "strategies": strategies,
+            "psychology_insight": psychology_insight,
+            "coaching_advice": coaching_advice,
+            "priority": "High" if confidence > 0.7 and sentiment in ["negative", "positive"] else "Medium"
+        }
+
+    def _format_enhanced_mitigation_strategies(self, strategies: Dict) -> str:
+        """Format enhanced mitigation strategies for display"""
+        if not strategies or not strategies.get("strategies"):
+            return "• Continue current disciplined investment approach"
+        
+        formatted_strategies = []
+        for strategy in strategies["strategies"]:
+            if not strategy.startswith("•"):
+                strategy = f"• {strategy}"
+            formatted_strategies.append(strategy)
+        
+        return "\n".join(formatted_strategies)
+
+    def _format_enhanced_emotional_strategies(self, strategies: Dict) -> str:
+        """Format enhanced emotional strategies for display"""
+        if not strategies or not strategies.get("strategies"):
+            return "• Maintain emotional awareness and disciplined approach"
+        
+        formatted_strategies = []
+        for strategy in strategies["strategies"]:
+            if not strategy.startswith("•"):
+                strategy = f"• {strategy}"
+            formatted_strategies.append(strategy)
+        
+        return "\n".join(formatted_strategies)
+
+    def _get_highest_risk_bias(self, detected_biases: Dict) -> str:
+        """Get the highest risk bias name"""
+        if not detected_biases:
+            return "None"
+        
+        # Find bias with highest severity or longest finding text (as proxy for severity)
+        highest_risk_bias = max(
+            detected_biases.items(),
+            key=lambda x: (
+                1 if x[1].get('severity') == 'High' else 0,
+                len(x[1].get('finding', ''))
+            )
+        )
+        
+        return highest_risk_bias[0]
+
+    def _analyze_enhanced_emotional_impact(self, sentiment: str, confidence: float, 
+                                        portfolio_context: Dict, portfolio_returns: Optional[float]) -> Dict:
+        """Analyze enhanced emotional impact on investment decisions"""
+        
+        # Base risk scores by sentiment
+        sentiment_risk_map = {
+            'negative': 75,
+            'positive': 60,  # Overconfidence risk
+            'uncertain': 65,
+            'mixed': 55,
+            'neutral': 30
+        }
+        
+        base_risk = sentiment_risk_map.get(sentiment, 50)
+        
+        # Adjust for confidence level
+        if confidence > 0.8:
+            confidence_multiplier = 1.3  # High confidence increases risk
+        elif confidence > 0.6:
+            confidence_multiplier = 1.1
+        else:
+            confidence_multiplier = 0.9
+        
+        # Adjust for portfolio performance context
+        performance_multiplier = 1.0
+        if portfolio_returns is not None:
+            if portfolio_returns < -0.1:  # -10% returns
+                performance_multiplier = 1.2  # Losses increase emotional risk
+            elif portfolio_returns > 0.2:  # +20% returns
+                performance_multiplier = 1.1  # Gains can increase overconfidence
+        
+        final_risk_score = int(base_risk * confidence_multiplier * performance_multiplier)
+        final_risk_score = min(95, max(25, final_risk_score))
+        
+        # Generate risk assessment
+        if final_risk_score > 70:
+            decision_quality_risk = "High"
+            portfolio_impact = "Potentially Significant"
+            analysis = "Strong emotional state detected with high potential for suboptimal decisions"
+        elif final_risk_score > 50:
+            decision_quality_risk = "Moderate"
+            portfolio_impact = "Moderate"
+            analysis = "Emotional state may influence decision quality - monitor closely"
+        else:
+            decision_quality_risk = "Low"
+            portfolio_impact = "Minimal"
+            analysis = "Emotional state supports rational investment decision-making"
+        
+        return {
+            "risk_score": final_risk_score,
+            "decision_quality_risk": decision_quality_risk,
+            "portfolio_impact": portfolio_impact,
+            "analysis": analysis,
+            "confidence_impact": confidence,
+            "sentiment_classification": sentiment
+        }

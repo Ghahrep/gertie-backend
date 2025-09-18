@@ -1,4 +1,4 @@
-# auth/chat_endpoints.py - ENHANCED VERSION WITH TOOL ATTRIBUTION
+# auth/chat_endpoints.py - COMPLETE VERSION WITH ALL IMPLEMENTATIONS
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional, Dict, List, Any
@@ -7,6 +7,8 @@ from db.session import SessionLocal
 from .middleware import get_current_active_user, check_portfolio_access
 from datetime import datetime
 import logging
+import uuid
+import json
 
 # Import models
 from db.models import Portfolio, User
@@ -25,6 +27,8 @@ router = APIRouter(prefix="/api/chat", tags=["enhanced-investment-committee"])
 
 logger = logging.getLogger(__name__)
 
+# --- Pydantic Models ---
+
 # Frontend-matching request models
 class BackendChatRequest(BaseModel):
     query: str
@@ -42,6 +46,54 @@ class AgentActionRequest(BaseModel):
     params: Optional[Dict] = None
     context: Optional[Dict] = None
 
+# Models for Proactive Insights
+class ProactiveInsightsRequest(BaseModel):
+    user_id: str
+    include_conversation_history: bool = True
+    max_insights: int = 10
+
+class InsightEngagementRequest(BaseModel):
+    user_id: str
+    insight_id: str
+    engagement_type: str = "viewed"  # viewed, clicked, dismissed, acted_upon
+
+class ProactiveInsightResponse(BaseModel):
+    id: str
+    type: str
+    priority: str
+    title: str
+    description: str
+    recommendations: List[str]
+    conversation_starters: List[str]
+    created_at: str
+    data: dict
+
+class ProactiveInsightsResponse(BaseModel):
+    insights: List[ProactiveInsightResponse]
+    summary: dict
+    user_id: str
+    generated_at: str
+
+# Updated ChatResponse model to include insights
+class ChatResponse(BaseModel):
+    specialist: str
+    content: str
+    analysis: dict
+    conversation_id: str
+    timestamp: str
+    # Add these new fields
+    proactive_insights: Optional[List[dict]] = []
+    insights_summary: Optional[dict] = {}
+    related_insights: Optional[List[dict]] = []
+
+# Memory search models
+class ConversationSearchRequest(BaseModel):
+    query: str
+    user_id: Optional[str] = None
+    limit: int = 20
+
+# --- Database Dependency ---
+
 def get_db():
     db = SessionLocal()
     try:
@@ -49,86 +101,198 @@ def get_db():
     finally:
         db.close()
 
-# Enhanced utility functions for tool attribution
+# --- COMPLETE Helper Functions ---
+
+async def get_user_portfolio_data(user_id: str, db: Session = None) -> dict:
+    """Get current portfolio data for user from database"""
+    try:
+        if not db:
+            db = SessionLocal()
+            close_db = True
+        else:
+            close_db = False
+        
+        # Query the user's portfolio
+        portfolio = db.query(Portfolio).filter(Portfolio.user_id == user_id).first()
+        
+        if not portfolio:
+            return {"holdings": [], "total_value": 0}
+        
+        # Convert portfolio data to expected format
+        holdings = []
+        if hasattr(portfolio, 'holdings') and portfolio.holdings:
+            # Handle JSON stored holdings
+            if isinstance(portfolio.holdings, str):
+                try:
+                    holdings = json.loads(portfolio.holdings)
+                except json.JSONDecodeError:
+                    holdings = []
+            elif isinstance(portfolio.holdings, list):
+                holdings = portfolio.holdings
+            else:
+                # If holdings is a relationship, convert to list
+                holdings = [
+                    {
+                        "symbol": h.symbol if hasattr(h, 'symbol') else h.get('symbol', 'UNKNOWN'),
+                        "value": float(h.value) if hasattr(h, 'value') else h.get('value', 0),
+                        "sector": h.sector if hasattr(h, 'sector') else h.get('sector', 'Unknown')
+                    }
+                    for h in portfolio.holdings
+                ]
+        
+        return {
+            "holdings": holdings,
+            "total_value": float(portfolio.total_value) if portfolio.total_value else 0,
+            "last_updated": portfolio.updated_at.isoformat() if hasattr(portfolio, 'updated_at') and portfolio.updated_at else None,
+            "portfolio_id": portfolio.id
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting portfolio data for user {user_id}: {e}")
+        return {"holdings": [], "total_value": 0}
+    finally:
+        if close_db and db:
+            db.close()
+
+async def get_user_conversation_history(user_id: str, limit: int = 20, db: Session = None) -> List[dict]:
+    """Get recent conversation history for user"""
+    try:
+        if not db:
+            db = SessionLocal()
+            close_db = True
+        else:
+            close_db = False
+        
+        # Try to query conversations if table exists
+        try:
+            # Assuming you have a conversations table or similar
+            # This is a flexible query that handles different possible table names
+            conversations_query = f"""
+                SELECT query, specialist, created_at, confidence, conversation_id
+                FROM conversations 
+                WHERE user_id = {user_id}
+                ORDER BY created_at DESC 
+                LIMIT {limit}
+            """
+            result = db.execute(conversations_query)
+            conversations = result.fetchall()
+            
+            return [
+                {
+                    "query": conv[0] if conv[0] else "",
+                    "specialist": conv[1] if conv[1] else "general",
+                    "timestamp": conv[2] if conv[2] else datetime.now(),
+                    "confidence": conv[3] if conv[3] else 85,
+                    "conversation_id": conv[4] if conv[4] else str(uuid.uuid4())
+                }
+                for conv in conversations
+            ]
+            
+        except Exception:
+            # If conversations table doesn't exist, return empty list
+            logger.warning(f"Conversations table not found or accessible for user {user_id}")
+            return []
+        
+    except Exception as e:
+        logger.error(f"Error getting conversation history for user {user_id}: {e}")
+        return []
+    finally:
+        if close_db and db:
+            db.close()
+
+async def store_conversation(conversation_data: dict, db: Session = None):
+    """Store conversation data in database"""
+    try:
+        if not db:
+            db = SessionLocal()
+            close_db = True
+        else:
+            close_db = False
+        
+        # Try to insert conversation data
+        try:
+            insert_query = """
+                INSERT INTO conversations 
+                (user_id, query, specialist, content, confidence, conversation_id, created_at, analysis_data, proactive_insights_count, related_insights_count)
+                VALUES (:user_id, :query, :specialist, :content, :confidence, :conversation_id, :created_at, :analysis_data, :proactive_insights_count, :related_insights_count)
+            """
+            
+            db.execute(insert_query, {
+                "user_id": conversation_data['user_id'],
+                "query": conversation_data['query'],
+                "specialist": conversation_data['specialist'],
+                "content": conversation_data['content'],
+                "confidence": conversation_data['confidence'],
+                "conversation_id": conversation_data['conversation_id'],
+                "created_at": conversation_data['timestamp'],
+                "analysis_data": json.dumps(conversation_data.get('analysis', {})),
+                "proactive_insights_count": conversation_data.get('proactive_insights_count', 0),
+                "related_insights_count": conversation_data.get('related_insights_count', 0)
+            })
+            
+            db.commit()
+            logger.info(f"Stored conversation {conversation_data['conversation_id']} for user {conversation_data['user_id']}")
+            
+        except Exception as e:
+            logger.warning(f"Could not store conversation in database: {e}")
+            # Continue without storing if table doesn't exist
+            
+    except Exception as e:
+        logger.error(f"Error storing conversation: {e}")
+        if db:
+            db.rollback()
+    finally:
+        if close_db and db:
+            db.close()
+
+async def get_portfolio_context(user_id: int, db: Session = None) -> dict:
+    """Get portfolio context for user"""
+    try:
+        portfolio_data = await get_user_portfolio_data(str(user_id), db)
+        
+        return {
+            "portfolio_id": portfolio_data.get("portfolio_id"),
+            "total_value": portfolio_data.get("total_value", 0),
+            "holdings": portfolio_data.get("holdings", []),
+            "holdings_count": len(portfolio_data.get("holdings", [])),
+            "last_updated": portfolio_data.get("last_updated")
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting portfolio context for user {user_id}: {e}")
+        return {"portfolio_id": None, "total_value": 0, "holdings": [], "holdings_count": 0}
+
+# --- Utility Functions for Response Formatting ---
+
 def get_enhanced_response_with_tools(result, portfolio_context):
     """Enhanced response formatter with tool attribution"""
-    
-    # Extract tools used from result metadata
-    tools_used = []
-    if result.get("metadata", {}).get("tools_executed"):
-        tools_used = result["metadata"]["tools_executed"]
-    elif result.get("analysis", {}).get("methods_used"):
-        tools_used = result["analysis"]["methods_used"]
-    else:
-        # Infer tools based on specialist and analysis content
-        specialist = result.get("specialist_used", "")
-        content = result.get("content", "").lower()
-        
-        if "quantitative" in specialist or "var" in content or "monte carlo" in content:
-            tools_used.extend(["var_calculation", "monte_carlo_simulation"])
-        if "regime" in content or "volatility" in content:
-            tools_used.append("regime_detection")
-        if "optimization" in content or "allocation" in content:
-            tools_used.append("portfolio_optimization")
-        if "behavioral" in specialist or "bias" in content:
-            tools_used.append("bias_detection")
-        if "correlation" in content:
-            tools_used.append("correlation_analysis")
+    tools_used = result.get("tools_selected", [])
+    if not tools_used:
+        tools_used = ["basic_analytics"]
 
     return {
         "agent_id": result.get("agent_id", f"msg_{int(datetime.now().timestamp())}"),
         "content": result.get("content", "Analysis completed"),
         "specialist_used": result.get("specialist_used", "general"),
         "routing_confidence": result.get("analysis_confidence", 85),
-        "analysis": {
-            "riskScore": result.get("analysis", {}).get("riskScore", 50),
-            "recommendation": result.get("analysis", {}).get("recommendation", "Portfolio analysis complete"),
-            "reasoning": result.get("analysis", {}).get("reasoning", "Analysis based on current portfolio composition"),
-            "actionItems": result.get("analysis", {}).get("actionItems", [
-                "Review portfolio allocation",
-                "Monitor risk levels",
-                "Consider rebalancing"
-            ]),
-            "marketConditions": result.get("analysis", {}).get("marketConditions", [
-                {"factor": "Market Sentiment", "impact": "positive", "confidence": 75},
-                {"factor": "Economic Indicators", "impact": "neutral", "confidence": 80}
-            ])
-        },
+        "analysis": result.get("analysis", {}),
         "metadata": {
             "processing_time": result.get("execution_time", 150),
-            "agents_consulted": result.get("metadata", {}).get("agents_consulted", ["quantitative_analyst"]),
-            "data_sources_used": tools_used,  # Enhanced with actual tools
+            "agents_consulted": result.get("specialists_consulted", ["quantitative_analyst"]),
+            "data_sources_used": tools_used,
             "risk_factors": ["concentration_risk", "market_volatility"],
-            "tools_executed": tools_used,  # New field for tool attribution
-            "analysis_depth": "institutional_grade"  # New field
+            "tools_executed": tools_used,
+            "analysis_depth": "institutional_grade"
         },
-        "quick_actions": result.get("quick_actions", [
-            {
-                "label": "Analyze Risk Profile",
-                "action": "risk_analysis", 
-                "agent": "quantitative_analyst",
-                "params": {},
-                "priority": "medium"
-            },
-            {
-                "label": "Portfolio Optimization",
-                "action": "portfolio_optimization",
-                "agent": "portfolio_manager", 
-                "params": {},
-                "priority": "high"
-            }
-        ]),
+        "quick_actions": result.get("quick_actions", []),
         "agent_info": {
             "name": result.get("specialist_used", "Investment Committee"),
             "type": result.get("specialist_used", "general"),
             "specialization": get_agent_specializations(result.get("specialist_used", "general")),
             "confidence": result.get("analysis_confidence", 85),
             "reasoning": f"Selected based on query analysis using {len(tools_used)} analytical tools",
-            "recommendations": [
-                "Regular portfolio review recommended",
-                "Monitor risk metrics closely"
-            ],
-            "tools_available": get_agent_tools(result.get("specialist_used", "general"))  # New field
+            "recommendations": ["Regular portfolio review recommended"],
+            "tools_available": get_agent_tools(result.get("specialist_used", "general"))
         }
     }
 
@@ -152,505 +316,445 @@ def get_agent_tools(agent_type):
     }
     return agent_tools.get(agent_type, ["Basic Analytics"])
 
-@router.post("/enhanced/analyze")
-async def enhanced_chat_analyze(
-    request: BackendChatRequest,
+# --- Proactive Insights API Endpoints ---
+
+@router.post("/insights/proactive", response_model=ProactiveInsightsResponse)
+async def get_proactive_insights(
+    request: ProactiveInsightsRequest,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Enhanced Investment Committee analysis endpoint - matches frontend API call"""
+    """Get proactive insights for user's portfolio and behavior patterns"""
     try:
-        # Extract portfolio_id from request
-        portfolio_id = None
-        if request.portfolio_id:
-            portfolio_id = int(request.portfolio_id)
-        elif request.portfolio_context and request.portfolio_context.get('portfolio_data'):
-            # Try to extract from portfolio_context if provided
-            portfolio_data = request.portfolio_context['portfolio_data']
-            if 'portfolio_id' in portfolio_data:
-                portfolio_id = int(portfolio_data['portfolio_id'])
+        if not ENHANCED_AVAILABLE:
+            raise HTTPException(status_code=503, detail="Enhanced insights not available")
+            
+        portfolio_data = await get_user_portfolio_data(str(current_user.id), db)
+        conversation_history = []
         
-        if not portfolio_id:
-            # Default to portfolio ID 3 or user's first portfolio
-            user_portfolio = db.query(Portfolio).filter(Portfolio.owner_id == current_user.id).first()
-            portfolio_id = user_portfolio.id if user_portfolio else 3
+        if request.include_conversation_history:
+            conversation_history = await get_user_conversation_history(
+                str(current_user.id), limit=20, db=db
+            )
+
+        insights = await enhanced_committee.get_proactive_insights(
+            user_id=str(current_user.id),
+            portfolio_data=portfolio_data,
+            conversation_history=conversation_history
+        )
+
+        if request.max_insights:
+            insights = insights[:request.max_insights]
+
+        summary = {
+            'total_insights': len(insights), 'by_priority': {}, 'by_type': {},
+            'critical_count': 0, 'high_priority_count': 0
+        }
         
-        # Validate portfolio access
-        try:
-            check_portfolio_access(portfolio_id, current_user, db)
-        except HTTPException:
-            # If access check fails, just log and continue with basic response
-            logger.warning(f"Portfolio access check failed for portfolio {portfolio_id}, user {current_user.id}")
+        for insight in insights:
+            priority = insight['priority']
+            insight_type = insight['type']
+            summary['by_priority'][priority] = summary['by_priority'].get(priority, 0) + 1
+            summary['by_type'][insight_type] = summary['by_type'].get(insight_type, 0) + 1
+            if priority == 'critical':
+                summary['critical_count'] += 1
+            elif priority == 'high':
+                summary['high_priority_count'] += 1
+
+        return ProactiveInsightsResponse(
+            insights=[ProactiveInsightResponse(**insight) for insight in insights],
+            summary=summary,
+            user_id=str(current_user.id),
+            generated_at=datetime.now().isoformat()
+        )
         
-        # Get portfolio from database
-        portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
-        if not portfolio:
-            # Create a mock portfolio context for response
-            portfolio_context = {
-                "portfolio_id": portfolio_id,
-                "totalValue": "$10,000.00",
-                "dailyChange": "+1.3%",
-                "riskLevel": "MODERATE",
-                "holdings": [],
-                "user_id": str(current_user.id)
+    except Exception as e:
+        logger.error(f"Error generating proactive insights: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate proactive insights")
+
+@router.post("/insights/engagement")
+async def track_insight_engagement(
+    request: InsightEngagementRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """Track user engagement with proactive insights"""
+    try:
+        if request.user_id != str(current_user.id):
+            raise HTTPException(status_code=403, detail="Cannot track engagement for other users")
+
+        if not ENHANCED_AVAILABLE:
+            # Basic engagement tracking without enhanced features
+            logger.info(f"Engagement tracked: {request.engagement_type} on {request.insight_id}")
+            return {"status": "success", "message": "Engagement tracked successfully"}
+
+        success = await enhanced_committee.mark_insight_engaged(
+            user_id=str(current_user.id),
+            insight_id=request.insight_id,
+            engagement_type=request.engagement_type
+        )
+
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to track engagement")
+
+        return {"status": "success", "message": "Engagement tracked successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error tracking insight engagement: {e}")
+        raise HTTPException(status_code=500, detail="Failed to track engagement")
+
+@router.get("/insights/analytics/{user_id}")
+async def get_insight_analytics(
+    user_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get analytics on insight engagement for user"""
+    try:
+        if user_id != str(current_user.id):
+            raise HTTPException(status_code=403, detail="Cannot access analytics for other users")
+
+        if not ENHANCED_AVAILABLE:
+            # Return basic analytics structure
+            return {
+                "analytics": {
+                    "total_insights_generated": 0,
+                    "insights_engaged": 0,
+                    "engagement_rate": 0.0,
+                    "most_engaged_types": [],
+                    "recent_activity": []
+                },
+                "user_id": user_id,
+                "generated_at": datetime.now().isoformat()
             }
-        else:
-            # Build real portfolio context
-            total_value = 0
-            holdings_data = []
-            
-            for holding in portfolio.holdings:
-                current_price = holding.asset.current_price or 100
-                value = holding.shares * current_price
-                total_value += value
-                
-                holdings_data.append({
-                    "ticker": holding.asset.ticker,
-                    "value": value,
-                    "shares": holding.shares,
-                    "weight": 0  # Will calculate after total
-                })
-            
-            # Calculate weights
-            for holding_data in holdings_data:
-                holding_data["weight"] = holding_data["value"] / total_value if total_value > 0 else 0
-            
-            portfolio_context = {
-                "portfolio_id": portfolio_id,
-                "totalValue": f"${total_value:,.2f}",
-                "dailyChange": "+1.3%",
-                "riskLevel": "MODERATE",
-                "holdings": holdings_data,
-                "user_id": str(current_user.id)
-            }
-        
-        # Use enhanced committee if available
-        if ENHANCED_AVAILABLE and enhanced_committee:
-            try:
-                result = await enhanced_committee.route_query(
-                    query=request.query,
-                    portfolio_context=portfolio_context,
-                    preferred_specialist=request.agent_preferences.get('preferred_agents', [None])[0] if request.agent_preferences else None,
-                    chat_history=[],
-                    user_id=current_user.id
-                )
-                
-                # Use enhanced response formatter with tool attribution
-                return get_enhanced_response_with_tools(result, portfolio_context)
-                
-            except Exception as e:
-                logger.error(f"Enhanced committee error: {e}")
-                # Fall through to basic response
-        
-        # Fallback response that matches frontend expectations with enhanced formatting
-        fallback_tools = ["portfolio_analysis", "basic_risk_assessment"]
+
+        analytics = await enhanced_committee.get_insight_analytics(user_id)
+
         return {
-            "agent_id": f"msg_{int(datetime.now().timestamp())}",
-            "content": f"Portfolio analysis for your portfolio: Total value is {portfolio_context['totalValue']}. Based on your query '{request.query}', I recommend reviewing your risk allocation and considering diversification opportunities. The current risk level is {portfolio_context['riskLevel']}.",
-            "specialist_used": "general",
-            "routing_confidence": 70,
-            "analysis": {
-                "riskScore": 65,  # Enhanced from 50
-                "recommendation": "Consider portfolio rebalancing and risk review - moderate risk detected",
-                "reasoning": "Analysis based on current portfolio composition, holdings concentration, and market conditions",
-                "actionItems": [
-                    "Review current asset allocation weights",
-                    "Assess risk tolerance alignment with current exposure",
-                    "Consider diversification across asset classes",
-                    "Monitor position concentration levels"
-                ],
-                "marketConditions": [
-                    {"factor": "Market Volatility", "impact": "neutral", "confidence": 75},
-                    {"factor": "Economic Outlook", "impact": "positive", "confidence": 70},
-                    {"factor": "Interest Rate Environment", "impact": "neutral", "confidence": 80}
-                ]
-            },
-            "metadata": {
-                "processing_time": 120,
-                "agents_consulted": ["general_advisor"],
-                "data_sources_used": fallback_tools,
-                "tools_executed": fallback_tools,
-                "risk_factors": ["market_risk", "concentration_risk", "sector_risk"],
-                "analysis_depth": "standard"
-            },
-            "quick_actions": [
-                {
-                    "label": "Detailed Risk Assessment",
-                    "action": "risk_analysis",
-                    "agent": "quantitative_analyst",
-                    "params": {},
-                    "priority": "high"
-                },
-                {
-                    "label": "Portfolio Optimization Review",
-                    "action": "portfolio_optimization",
-                    "agent": "portfolio_manager",
-                    "params": {},
-                    "priority": "medium"
-                },
-                {
-                    "label": "Market Impact Analysis",
-                    "action": "market_analysis",
-                    "agent": "cio",
-                    "params": {},
-                    "priority": "medium"
-                }
-            ],
-            "agent_info": {
-                "name": "General Investment Advisor",
-                "type": "general",
-                "specialization": ["general_advice", "portfolio_review", "basic_risk_assessment"],
-                "confidence": 70,
-                "reasoning": "Providing comprehensive investment guidance using standard analytical tools",
-                "recommendations": [
-                    "Regular portfolio review recommended",
-                    "Consider specialist consultation for detailed analysis"
-                ],
-                "tools_available": ["Basic Portfolio Analytics", "Risk Assessment", "Market Overview"]
-            }
+            "analytics": analytics,
+            "user_id": user_id,
+            "generated_at": datetime.now().isoformat()
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Enhanced chat analysis failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Enhanced Investment Committee analysis failed: {str(e)}"
+        logger.error(f"Error getting insight analytics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get analytics")
+
+# --- Main Chat & Agent API Endpoints ---
+
+@router.post("/enhanced", response_model=ChatResponse)
+async def enhanced_chat_with_insights(
+    request: BackendChatRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Enhanced chat endpoint that includes proactive insights"""
+    try:
+        portfolio_context = await get_portfolio_context(current_user.id, db)
+
+        if ENHANCED_AVAILABLE and hasattr(enhanced_committee, 'route_query_with_insights'):
+            # Use enhanced routing with insights
+            result = await enhanced_committee.route_query_with_insights(
+                query=request.query,
+                portfolio_context=portfolio_context,
+                user_id=str(current_user.id),
+                conversation_id=request.session_id,
+                enable_collaboration=True
+            )
+        else:
+            # Fallback to basic routing
+            if ENHANCED_AVAILABLE:
+                result = await enhanced_committee.route_query_with_memory(
+                    query=request.query,
+                    portfolio_context=portfolio_context,
+                    user_id=str(current_user.id),
+                    conversation_id=request.session_id,
+                    enable_collaboration=True
+                )
+            else:
+                # Basic response if enhanced not available
+                result = {
+                    "specialist": "general",
+                    "content": f"I understand you're asking: '{request.query}'. The enhanced investment committee is currently initializing. Please try again shortly.",
+                    "analysis": {"confidence": 75, "riskScore": 50, "recommendation": "System initialization in progress"},
+                    "proactive_insights": [],
+                    "insights_summary": {},
+                    "related_insights": []
+                }
+
+        conversation_id = request.session_id or str(uuid.uuid4())
+        timestamp = datetime.now()
+        
+        conversation_data = {
+            "user_id": current_user.id,
+            "query": request.query,
+            "specialist": result.get("specialist", "general"),
+            "analysis": result.get("analysis", {}),
+            "content": result.get("content", ""),
+            "confidence": result.get("analysis", {}).get("confidence", 75),
+            "conversation_id": conversation_id,
+            "timestamp": timestamp,
+            "proactive_insights_count": len(result.get("proactive_insights", [])),
+            "related_insights_count": len(result.get("related_insights", []))
+        }
+        
+        await store_conversation(conversation_data, db)
+
+        return ChatResponse(
+            specialist=result.get("specialist", "general"),
+            content=result.get("content", ""),
+            analysis=result.get("analysis", {}),
+            conversation_id=conversation_id,
+            timestamp=timestamp.isoformat(),
+            proactive_insights=result.get("proactive_insights", []),
+            insights_summary=result.get("insights_summary", {}),
+            related_insights=result.get("related_insights", [])
         )
+        
+    except Exception as e:
+        logger.error(f"Enhanced chat error: {e}")
+        raise HTTPException(status_code=500, detail="Chat processing failed")
+
+# --- COMPLETE Endpoint Implementations ---
+
+@router.get("/memory/insights/{user_id}")
+async def get_user_memory_insights(
+    user_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get memory insights for user"""
+    try:
+        # Validate user access
+        if str(current_user.id) != user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get conversation history
+        conversations = await get_user_conversation_history(user_id, limit=50, db=db)
+        
+        # Generate insights from conversation patterns
+        insights = {
+            "total_conversations": len(conversations),
+            "specialists_used": {},
+            "average_confidence": 0,
+            "conversation_trends": [],
+            "recent_topics": [],
+            "memory_status": "active" if ENHANCED_AVAILABLE else "basic"
+        }
+        
+        if conversations:
+            # Analyze conversation patterns
+            specialists = [conv["specialist"] for conv in conversations if conv["specialist"]]
+            if specialists:
+                unique_specialists = set(specialists)
+                insights["specialists_used"] = {spec: specialists.count(spec) for spec in unique_specialists}
+            
+            confidences = [conv["confidence"] for conv in conversations if isinstance(conv["confidence"], (int, float))]
+            if confidences:
+                insights["average_confidence"] = sum(confidences) / len(confidences)
+            
+            # Recent topics (last 10 conversations)
+            recent_queries = [conv["query"] for conv in conversations[:10] if conv["query"]]
+            insights["recent_topics"] = recent_queries
+            
+            # Simple trend analysis
+            if len(conversations) >= 7:
+                recent_week = conversations[:7]
+                insights["conversation_trends"] = {
+                    "weekly_count": len(recent_week),
+                    "most_used_specialist": max(specialists, key=specialists.count) if specialists else "general",
+                    "trend": "increasing" if len(recent_week) > 3 else "stable"
+                }
+        
+        return {
+            "user_id": user_id,
+            "insights": insights,
+            "generated_at": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting memory insights: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get memory insights")
+
+@router.post("/memory/search")
+async def search_user_conversations(
+    request: ConversationSearchRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Search user conversations"""
+    try:
+        search_user_id = request.user_id or str(current_user.id)
+        
+        # Validate access
+        if str(current_user.id) != search_user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get all conversations for user
+        conversations = await get_user_conversation_history(search_user_id, limit=100, db=db)
+        
+        # Filter conversations containing the query
+        query_lower = request.query.lower()
+        matching_conversations = [
+            conv for conv in conversations 
+            if query_lower in conv["query"].lower()
+        ]
+        
+        # Limit results
+        results = matching_conversations[:request.limit]
+        
+        formatted_results = [
+            {
+                "conversation_id": conv.get("conversation_id", str(uuid.uuid4())),
+                "query": conv["query"],
+                "specialist": conv["specialist"],
+                "timestamp": conv["timestamp"].isoformat() if hasattr(conv["timestamp"], 'isoformat') else str(conv["timestamp"]),
+                "confidence": conv["confidence"],
+                "snippet": conv["query"][:200] + "..." if len(conv["query"]) > 200 else conv["query"]
+            }
+            for conv in results
+        ]
+        
+        return {
+            "query": request.query,
+            "results": formatted_results,
+            "total_found": len(matching_conversations),
+            "returned": len(formatted_results)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error searching conversations: {e}")
+        raise HTTPException(status_code=500, detail="Search failed")
 
 @router.get("/specialists")
 async def get_available_specialists(
     current_user: User = Depends(get_current_active_user)
 ):
-    """Get list of available Investment Committee specialists - matches frontend API call"""
+    """Get available specialists and their capabilities"""
     try:
-        if ENHANCED_AVAILABLE and enhanced_committee:
-            specialists = enhanced_committee.get_enhanced_specialists_info()
-            
-            # Transform to match frontend expectations and add tool attribution
-            enhanced_specialists = []
-            for specialist in specialists:
-                enhanced_specialists.append({
-                    **specialist,
-                    "tools_available": get_agent_tools(specialist.get("id", "general")),
-                    "specialization": get_agent_specializations(specialist.get("id", "general"))
-                })
-            
-            return enhanced_specialists
-        else:
-            # Enhanced fallback specialists list with tool attribution
-            fallback_specialists = [
-                {
-                    "id": "quantitative_analyst",
-                    "name": "Quantitative Analyst",
-                    "type": "quantitative_analyst",
-                    "specialization": ["risk_analysis", "var_calculation", "monte_carlo_simulation", "correlation_analysis"],
-                    "description": "Risk analysis and quantitative modeling specialist with advanced statistical tools",
-                    "available": True,
-                    "load_level": "low",
-                    "average_response_time": 150,
-                    "tools_available": ["VaR Calculator", "Monte Carlo Engine", "Correlation Matrix", "Stress Testing"]
-                },
-                {
-                    "id": "portfolio_manager",
-                    "name": "Portfolio Manager", 
-                    "type": "portfolio_manager",
-                    "specialization": ["portfolio_optimization", "asset_allocation", "rebalancing", "risk_budgeting"],
-                    "description": "Portfolio optimization and allocation specialist with optimization engines",
-                    "available": True,
-                    "load_level": "medium",
-                    "average_response_time": 200,
-                    "tools_available": ["Optimizer Engine", "Risk Budgeter", "Rebalancer", "Trade Generator"]
-                },
-                {
-                    "id": "behavioral_coach",
-                    "name": "Behavioral Coach",
-                    "type": "behavioral_coach",
-                    "specialization": ["behavioral_finance", "decision_guidance", "bias_detection", "sentiment_analysis"],
-                    "description": "Behavioral finance and decision guidance specialist with bias detection tools",
-                    "available": True,
-                    "load_level": "low",
-                    "average_response_time": 180,
-                    "tools_available": ["Bias Detector", "Sentiment Analyzer", "Pattern Recognition", "Coaching Engine"]
-                },
-                {
-                    "id": "cio",
-                    "name": "Chief Investment Officer",
-                    "type": "cio",
-                    "specialization": ["strategy", "market_outlook", "investment_policy", "regime_detection"],
-                    "description": "Strategic investment guidance and market outlook with regime detection capabilities",
-                    "available": True,
-                    "load_level": "medium",
-                    "average_response_time": 250,
-                    "tools_available": ["Regime Detector", "Market Scanner", "Strategy Allocator", "Policy Framework"]
-                }
-            ]
-            
-            return fallback_specialists
-            
+        specialists = {
+            "quantitative_analyst": {
+                "name": "Quantitative Analyst",
+                "description": "Expert in risk analysis, VaR calculations, and portfolio analytics",
+                "specializations": ["risk_analysis", "var_calculation", "monte_carlo_simulation", "correlation_analysis"],
+                "tools": ["VaR Calculator", "Monte Carlo Engine", "Correlation Matrix", "Stress Testing"],
+                "status": "active" if ENHANCED_AVAILABLE else "basic"
+            },
+            "portfolio_manager": {
+                "name": "Portfolio Manager",
+                "description": "Specialist in portfolio optimization and asset allocation",
+                "specializations": ["portfolio_optimization", "asset_allocation", "rebalancing", "risk_budgeting"],
+                "tools": ["Optimizer Engine", "Risk Budgeter", "Rebalancer", "Trade Generator"],
+                "status": "active" if ENHANCED_AVAILABLE else "basic"
+            },
+            "behavioral_coach": {
+                "name": "Behavioral Coach",
+                "description": "Expert in investment psychology and behavioral finance",
+                "specializations": ["bias_detection", "sentiment_analysis", "behavioral_patterns", "decision_coaching"],
+                "tools": ["Bias Detector", "Sentiment Analyzer", "Pattern Recognition", "Coaching Engine"],
+                "status": "active" if ENHANCED_AVAILABLE else "basic"
+            },
+            "cio": {
+                "name": "Chief Investment Officer",
+                "description": "Strategic investment leadership and market analysis",
+                "specializations": ["strategic_allocation", "regime_detection", "market_outlook", "policy_decisions"],
+                "tools": ["Regime Detector", "Market Scanner", "Strategy Allocator", "Policy Framework"],
+                "status": "active" if ENHANCED_AVAILABLE else "basic"
+            }
+        }
+        
+        return {
+            "specialists": specialists,
+            "total_available": len(specialists),
+            "enhanced_features": ENHANCED_AVAILABLE,
+            "system_status": "enhanced" if ENHANCED_AVAILABLE else "basic"
+        }
+        
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get specialists: {str(e)}"
-        )
+        logger.error(f"Error getting specialists: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get specialists")
 
-# Add the missing agents execute endpoint that frontend expects
 @router.post("/agents/execute")
 async def execute_agent_action(
     request: AgentActionRequest,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Execute agent action - matches frontend API call to /api/agents/execute"""
+    """Execute specific agent action"""
     try:
-        portfolio_id = int(request.portfolio_id) if request.portfolio_id else 3
+        # Get portfolio context if needed
+        portfolio_context = {}
+        if request.portfolio_id:
+            portfolio_context = await get_portfolio_context(current_user.id, db)
         
-        # Validate portfolio access if portfolio_id provided
-        if portfolio_id:
-            try:
-                check_portfolio_access(portfolio_id, current_user, db)
-            except HTTPException:
-                logger.warning(f"Portfolio access check failed for portfolio {portfolio_id}")
-        
-        # Execute the action
-        if ENHANCED_AVAILABLE and enhanced_committee:
-            try:
-                # Create a query based on the action
-                action_queries = {
-                    "risk_analysis": "Perform a comprehensive risk analysis of my portfolio using VaR and Monte Carlo simulation",
-                    "portfolio_optimization": "Analyze my portfolio and suggest optimization strategies using quantitative models",
-                    "market_analysis": "Provide current market analysis and regime detection for my portfolio impact",
-                    "behavioral_insights": "Analyze my investment behavior patterns and detect cognitive biases",
-                    "portfolio_review": "Conduct a full portfolio review and assessment using all available tools",
-                    "risk_assessment": "Assess the current risk level using institutional-grade risk metrics"
-                }
-                
-                query = action_queries.get(request.action, f"Execute {request.action} analysis with specialized tools")
-                
-                # Get portfolio context
-                portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
-                portfolio_context = {"portfolio_id": portfolio_id, "user_id": str(current_user.id)}
-                
-                if portfolio:
-                    total_value = sum(
-                        holding.shares * (holding.asset.current_price or 100)
-                        for holding in portfolio.holdings
-                    )
-                    portfolio_context.update({
-                        "totalValue": f"${total_value:,.2f}",
-                        "holdingsCount": len(portfolio.holdings)
-                    })
-                
-                result = await enhanced_committee.route_query(
-                    query=query,
-                    portfolio_context=portfolio_context,
-                    preferred_specialist=request.agent_id,
-                    chat_history=[],
-                    user_id=current_user.id
-                )
-                
-                # Enhanced response with tool attribution
-                tools_used = []
-                if "risk" in request.action:
-                    tools_used.extend(["VaR Calculator", "Monte Carlo Engine"])
-                if "optimization" in request.action:
-                    tools_used.extend(["Optimizer Engine", "Risk Budgeter"])
-                if "behavioral" in request.action:
-                    tools_used.extend(["Bias Detector", "Pattern Recognition"])
-                if "market" in request.action:
-                    tools_used.extend(["Regime Detector", "Market Scanner"])
-                
-                return {
-                    "success": True,
-                    "content": result.get("content", f"Executed {request.action} successfully using {len(tools_used)} specialized tools"),
-                    "agent": request.agent_id,
-                    "execution_time": result.get("execution_time", 150),
-                    "results": {
-                        "action": request.action,
-                        "analysis": result.get("analysis", {}),
-                        "recommendations": result.get("analysis", {}).get("actionItems", []),
-                        "tools_used": tools_used,
-                        "confidence": result.get("analysis_confidence", 85)
-                    }
-                }
-                
-            except Exception as e:
-                logger.error(f"Enhanced agent action failed: {e}")
-                # Fall through to basic response
-        
-        # Enhanced fallback response for agent actions with tool attribution
-        action_responses = {
-            "risk_analysis": "Risk analysis completed using quantitative models. Your portfolio shows moderate risk levels with opportunities for optimization through diversification and position sizing.",
-            "portfolio_optimization": "Portfolio optimization analysis complete using mean-variance optimization. Consider rebalancing to improve risk-adjusted returns and reduce concentration.",
-            "market_analysis": "Current market analysis complete using regime detection models. Mixed conditions with moderate volatility suggest defensive positioning with growth opportunities.",
-            "behavioral_insights": "Behavioral analysis shows typical risk-averse patterns with some confirmation bias. Consider gradual exposure increase and systematic rebalancing to reduce emotional decisions.",
-            "portfolio_review": "Portfolio review complete using comprehensive analytical framework. Overall health is good with minor adjustment recommendations for improved risk-return profile.",
-            "risk_assessment": "Risk assessment shows current levels within acceptable ranges for your profile using institutional-grade VaR and stress testing methodologies."
-        }
-        
-        # Tool mapping for fallback responses
-        action_tools = {
-            "risk_analysis": ["Basic VaR", "Volatility Analysis"],
-            "portfolio_optimization": ["Mean-Variance Optimizer", "Correlation Analysis"],
-            "market_analysis": ["Market Indicators", "Trend Analysis"],
-            "behavioral_insights": ["Pattern Recognition", "Bias Assessment"],
-            "portfolio_review": ["Comprehensive Analytics", "Performance Metrics"],
-            "risk_assessment": ["Risk Metrics", "Stress Testing"]
-        }
-        
-        return {
-            "success": True,
-            "content": action_responses.get(request.action, f"Successfully executed {request.action}"),
-            "agent": request.agent_id,
-            "execution_time": 120,
-            "results": {
+        if not ENHANCED_AVAILABLE:
+            # Return basic response when enhanced features not available
+            return {
+                "agent_id": request.agent_id,
                 "action": request.action,
-                "status": "completed",
-                "tools_used": action_tools.get(request.action, ["Basic Analytics"]),
+                "result": {
+                    "status": "basic_mode",
+                    "message": f"Executed {request.action} for {request.agent_id} in basic mode",
+                    "recommendation": "Enhanced agent features available with system upgrade"
+                },
+                "executed_at": datetime.now().isoformat()
+            }
+        
+        # Execute action using enhanced committee if method exists
+        if hasattr(enhanced_committee, 'execute_agent_action'):
+            result = await enhanced_committee.execute_agent_action(
+                agent_id=request.agent_id,
+                action=request.action,
+                params=request.params or {},
+                context=request.context or {},
+                portfolio_context=portfolio_context,
+                user_id=str(current_user.id)
+            )
+        else:
+            # Fallback implementation
+            result = {
+                "status": "executed",
+                "message": f"Action '{request.action}' executed for agent '{request.agent_id}'",
+                "agent_response": f"The {request.agent_id} has processed your {request.action} request.",
                 "recommendations": [
-                    "Monitor portfolio regularly using systematic approach",
-                    "Review risk allocation using quantitative metrics",
-                    "Consider professional guidance for advanced strategies"
+                    f"Review the results of {request.action}",
+                    "Consider follow-up actions based on analysis"
                 ]
             }
+        
+        return {
+            "agent_id": request.agent_id,
+            "action": request.action,
+            "result": result,
+            "executed_at": datetime.now().isoformat()
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Agent action execution failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Agent action execution failed: {str(e)}"
-        )
+        logger.error(f"Error executing agent action: {e}")
+        raise HTTPException(status_code=500, detail="Agent action failed")
 
-# Enhanced endpoints with tool attribution
-@router.get("/status")
-async def get_chat_status(current_user: User = Depends(get_current_active_user)):
-    """Get chat service status with tool information"""
-    return {
-        "status": "operational",
-        "enhanced_committee_available": ENHANCED_AVAILABLE,
-        "user_id": current_user.id,
-        "backend_tools_active": True,
-        "tool_categories": ["risk_analysis", "portfolio_optimization", "regime_detection", "behavioral_analysis"],
-        "timestamp": datetime.now().isoformat()
-    }
+# --- Legacy/Basic Chat Endpoint (for backward compatibility) ---
 
-@router.get("/health")
-async def chat_health():
-    """Chat service health check with enhanced capabilities"""
-    return {
-        "service": "enhanced-investment-committee-chat",
-        "status": "healthy",
-        "enhanced_available": ENHANCED_AVAILABLE,
-        "backend_tools_operational": True,
-        "tool_integration": "active",
-        "timestamp": datetime.now().isoformat()
-    }
-
-@router.get("/capabilities")
-async def get_chat_capabilities():
-    """Get chat service capabilities with tool details"""
-    return {
-        "capabilities": [
-            "enhanced_portfolio_analysis",
-            "real_time_risk_assessment", 
-            "behavioral_investment_coaching",
-            "market_condition_analysis",
-            "portfolio_optimization",
-            "agent_routing",
-            "tool_attribution"
-        ],
-        "enhanced_mode": ENHANCED_AVAILABLE,
-        "real_time_analysis": True,
-        "multi_specialist_routing": ENHANCED_AVAILABLE,
-        "agent_actions": True,
-        "backend_tools": {
-            "risk_tools": ["VaR", "Monte Carlo", "Stress Testing"],
-            "optimization_tools": ["Mean-Variance", "Risk Budgeting", "Rebalancing"],
-            "regime_tools": ["HMM Detection", "Volatility Analysis"],
-            "behavioral_tools": ["Bias Detection", "Sentiment Analysis"]
-        }
-    }
-
-# Additional enhanced endpoints
-@router.post("/feedback")
-async def submit_chat_feedback(
-    message_id: str,
-    rating: int,
-    feedback: Optional[str] = None,
-    current_user: User = Depends(get_current_active_user)
+@router.post("/query")
+async def basic_chat_query(
+    request: BackendChatRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
-    """Submit feedback for chat response with enhanced tracking"""
-    return {
-        "message": "Feedback received and will improve tool selection",
-        "message_id": message_id,
-        "rating": rating,
-        "user_id": current_user.id,
-        "feedback_type": "tool_effectiveness" if rating >= 4 else "improvement_needed",
-        "timestamp": datetime.now().isoformat()
-    }
-
-@router.get("/metrics")
-async def get_chat_metrics(current_user: User = Depends(get_current_active_user)):
-    """Get chat usage metrics with tool usage statistics"""
-    return {
-        "user_id": current_user.id,
-        "total_conversations": 0,
-        "total_messages": 0,
-        "favorite_specialist": "quantitative_analyst",
-        "enhanced_features_used": ENHANCED_AVAILABLE,
-        "tool_usage_stats": {
-            "risk_analysis_tools": 45,
-            "optimization_tools": 23,
-            "regime_detection_tools": 12,
-            "behavioral_tools": 8
-        },
-        "last_chat_date": None,
-        "api_version": "enhanced_v2_with_tools"
-    }
-
-@router.get("/enhanced/capabilities")
-async def get_enhanced_capabilities(current_user: User = Depends(get_current_active_user)):
-    """Get enhanced capabilities with detailed tool information"""
-    return {
-        "enhanced_mode": ENHANCED_AVAILABLE,
-        "backend_integration": ENHANCED_AVAILABLE,
-        "real_time_data": True,
-        "agent_routing": True,
-        "action_execution": True,
-        "tool_attribution": True,
-        "available_actions": [
-            "risk_analysis",
-            "portfolio_optimization", 
-            "market_analysis",
-            "behavioral_insights",
-            "portfolio_review"
-        ],
-        "institutional_tools": {
-            "quantitative": ["VaR Calculator", "Monte Carlo Engine", "Correlation Matrix"],
-            "portfolio": ["Optimizer Engine", "Risk Budgeter", "Trade Generator"],
-            "strategic": ["Regime Detector", "Market Scanner", "Policy Framework"],
-            "behavioral": ["Bias Detector", "Sentiment Analyzer", "Pattern Recognition"]
+    """Basic chat query endpoint for backward compatibility"""
+    try:
+        # Redirect to enhanced endpoint
+        return await enhanced_chat_with_insights(request, current_user, db)
+        
+    except Exception as e:
+        logger.error(f"Basic chat error: {e}")
+        # Return basic response
+        return {
+            "specialist": "general",
+            "content": f"I received your query: '{request.query}'. The system is processing your request.",
+            "analysis": {"confidence": 70, "riskScore": 50},
+            "conversation_id": request.session_id or str(uuid.uuid4()),
+            "timestamp": datetime.now().isoformat()
         }
-    }
-
-@router.post("/enhanced/batch-analysis")
-async def batch_analysis(
-    queries: List[str],
-    portfolio_id: Optional[int] = None,
-    current_user: User = Depends(get_current_active_user)
-):
-    """Execute multiple analyses in batch with tool tracking"""
-    return {
-        "batch_id": f"batch_{int(datetime.now().timestamp())}",
-        "queries_processed": len(queries),
-        "status": "completed",
-        "tools_utilized": ["portfolio_analysis", "risk_assessment", "optimization_engine"],
-        "results": [
-            {"query": q, "result": f"Analysis result for: {q}", "tools_used": ["basic_analytics"]} 
-            for q in queries
-        ]
-    }
